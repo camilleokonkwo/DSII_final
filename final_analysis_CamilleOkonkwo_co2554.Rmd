@@ -1,0 +1,286 @@
+---
+title: "Data Science II Final Project Analysis"
+author: "Camille Okonkwo"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+\newpage
+
+```{r setup, include=FALSE}
+library(tidyverse)
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(tidymodels)
+library(splines)
+library(caret)
+library(glmnet)
+library(table1)
+library(kableExtra)
+library(summarytools)
+library(corrplot)
+library(cowplot)
+```
+\newpage
+
+# Background
+
+A research study aims to identify key factors that predict the severity of COVID-19 illness. This study collects demographic information, clinical variables, and disease severity among participants infected with COVID-19 between 2021 and 2023. The goal is to develop a robust prediction model that can accurately predict COVID-19 severity and understand how predictors impact the risk of severe infection.
+
+# Data
+
+The training data in "severity_training.RData" includes data from 800 participants.
+
+The test data in "severity_test.RData" includes data from another set of 200 participants.
+
+Here is a description of each variable:
+
+* ID (`id`): Participant ID
+* Age (`age`): Age
+* Gender (`gender`): 1 = Male, 0 = Female
+* Race/ethnicity (`race`): 1 = White, 2 = Asian, 3 = Black, 4 = Hispanic
+* Smoking (`smoking`): Smoking status; 0 = Never smoked, 1 = Former smoker, 2 = Current smoker
+* Height (`height`): Height (in centimeters)
+* Weight (`weight`): Weight (in kilograms)
+* BMI (`bmi`): Body Mass Index; BMI = weight (in kilograms) / height (in meters) squared
+* Hypertension (`hypertension`): 0 = No, 1 = Yes
+* Diabetes (`diabetes`): 0 = No, 1 = Yes
+* Systolic blood pressure (`SBP`): Systolic blood pressure (in mm/Hg)
+* LDL cholesterol (`LDL`): LDL (low-density lipoprotein) cholesterol (in mg/dL)
+* Vaccination status at the time of infection (`vaccine`): 0 = Not vaccinated, 1 = Vaccinated
+* Depression score (`depression`): Higher scores indicate higher risk for depression
+* Severity of COVID-19 infection (`severity`): **Response variable**; 0 = Not severe,  1 = Severe
+
+## Data Preparation
+```{r data_partition, echo = T, message = FALSE, results = 'hide', warning=FALSE}
+# loading training data
+load("data/severity_training.RData") # is depression discrete?
+
+# making discrete variables factors
+training_data = training_data |> 
+  janitor::clean_names() |> 
+  select(-id) |> 
+  mutate(gender = as.factor(gender),
+         race = as.factor(race),
+         smoking = as.factor(smoking),
+         hypertension = as.factor(hypertension),
+         diabetes = as.factor(diabetes),
+         vaccine = as.factor(vaccine),
+         severity = as.factor(severity))
+
+# matrix of predictors & vector of response for data set exploration
+x_train = model.matrix(severity ~., training_data)[, -1]
+y_train = training_data$severity
+
+# loading testing data
+load("data/severity_test.RData")
+
+# making discrete variables factors
+test_data = test_data |> 
+  janitor::clean_names() |> 
+  select(-id) |> 
+  mutate(gender = as.factor(gender),
+         race = as.factor(race),
+         smoking = as.factor(smoking),
+         hypertension = as.factor(hypertension),
+         diabetes = as.factor(diabetes),
+         vaccine = as.factor(vaccine),
+         severity = as.factor(severity))
+
+# matrix of predictors and vector of response
+x_test = model.matrix(severity ~., test_data)[, -1]
+y_test = test_data$severity
+```
+\newpage
+
+# Exploratory analysis and data visualization
+
+## Descriptive Statistics
+```{r}
+descriptive_table = table1(~ age + gender + race + smoking + height + weight + bmi + hypertension + diabetes + sbp + ldl + vaccine + depression | severity,
+                            data = training_data,
+                            overall = "Total",
+                            caption = "Descriptive Characteristics of Participants, Stratified by Severity of COVID-19 Infection")
+
+ds = t1kable(descriptive_table)
+ds
+```
+
+## Discrete Variable Visualization
+```{r}
+# gender x severity
+prop_gender <- training_data %>%
+  group_by(gender, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+gender_labels = c("1" = "Male", "0" = "Female")
+
+ggplot(prop_gender,
+       aes(y = factor(gender),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Gender", fill = "Severity") +
+  ggtitle("Proportion of Severity by Gender") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = gender_labels) +
+  theme_minimal()
+
+# race x severity 
+prop_race <- training_data %>%
+  group_by(race, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+race_labels = c("1" = "White", "2" = "Asian", "3" = "Black", "4" = "Hispanic")
+
+ggplot(prop_race,
+       aes(y = factor(race),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Race", fill = "Severity") +
+  ggtitle("Proportion of Severity by Race") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = race_labels) +
+  theme_minimal()
+
+# smoking status x severity
+prop_smoking <- training_data %>%
+  group_by(smoking, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+smoking_labels = c("1" = "Former Smoker", "2" = "Current Smoker", "0" = "Never Smoked")
+
+ggplot(prop_smoking,
+       aes(y = factor(smoking),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Smoking Status", fill = "Severity") +
+  ggtitle("Proportion of Severity by Smoking Status") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = smoking_labels) +
+  theme_minimal()
+
+# hypertension status x severity
+prop_hyp <- training_data %>%
+  group_by(hypertension, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+hyp_labels = c("0" = "No", "1" = "Yes")
+
+ggplot(prop_hyp,
+       aes(y = factor(hypertension),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Hypertension Status", fill = "Severity") +
+  ggtitle("Proportion of Severity by Hypertension Status") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = hyp_labels) +
+  theme_minimal()
+
+# diabetes x severity
+prop_dia <- training_data %>%
+  group_by(diabetes, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+dia_labels = c("0" = "No", "1" = "Yes")
+
+ggplot(prop_dia,
+       aes(y = factor(diabetes),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Diabetes Status", fill = "Severity") +
+  ggtitle("Proportion of Severity by Diabetes Status") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = dia_labels) +
+  theme_minimal()
+
+# vaccine x severity
+prop_vaccine <- training_data %>%
+  group_by(vaccine, severity) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count))
+
+vax_labels = c("0" = "Not vaccinated", "1" = "Vaccinated")
+
+ggplot(prop_vaccine,
+       aes(y = factor(vaccine),
+           x = prop,
+           fill = factor(severity), label = scales::percent(prop))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
+  labs(x = "Proportion", y = "Vaccination Status at Time of Infection", fill = "Severity") +
+  ggtitle("Proportion of Severity by Vaccination Status") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  scale_y_discrete(labels = vax_labels) +
+  theme_minimal()
+```
+
+## Continuous Variable Visualization
+```{r}
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5)
+theme1$plot.symbol$pch <- 2
+theme1$plot.line$col <- rgb(.8, .1, .1, 1)
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+
+featurePlot(
+  x_train[, -c(2, 3, 4, 5, 6, 7, 11, 12, 15)],
+  y_train,
+  plot = "box",
+  labels = c("", "Y"),
+  type = c("p", "smooth"),
+  layout = c(4, 3))
+```
+
+\newpage
+
+# Model training
+```{r}
+```
+\newpage
+
+# Results
+```{r}
+
+```
+\newpage
+
+# Conclusion
+```{r}
+```
+\newpage
+
+
