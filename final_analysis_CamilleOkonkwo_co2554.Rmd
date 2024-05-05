@@ -37,6 +37,19 @@ library(kableExtra)
 library(summarytools)
 library(corrplot)
 library(cowplot)
+
+library(vip)
+library(pROC)
+library(glmnet)
+library(tidymodels)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(AppliedPredictiveModeling)
+
+library(rpart)
+library(rpart.plot)
 ```
 \newpage
 
@@ -75,38 +88,94 @@ load("data/severity_training.RData") # is depression discrete?
 
 # making discrete variables factors
 training_data = training_data |> 
-  janitor::clean_names() |> 
   select(-id) |> 
-  mutate(gender = as.factor(gender),
-         race = as.factor(race),
-         smoking = as.factor(smoking),
-         hypertension = as.factor(hypertension),
-         diabetes = as.factor(diabetes),
-         vaccine = as.factor(vaccine),
-         severity = as.factor(severity))
+  mutate_at(vars(age, height, weight, bmi, SBP, LDL, depression), as.numeric) |> 
+ mutate(
+    gender = factor(gender, 
+                    levels = c(0, 1), 
+                    labels = c("Female", "Male")) |> 
+      relevel(ref = "Female"),
+    race = factor(race, 
+                  levels = c(1, 2, 3, 4), 
+                  labels = c("White", "Asian", "Black", "Hispanic")) |> 
+      relevel(ref = "White"),
+    smoking = factor(smoking, 
+                     levels = c(0, 1, 2), 
+                     labels = c("Never_smoked", "Former_smoker", "Current_smoker")) |> 
+      relevel(ref = "Never_smoked"),
+    hypertension = factor(hypertension, 
+                          levels = c(0, 1), 
+                          labels = c("No", "Yes")) |> 
+      relevel(ref = "No"),
+    diabetes = factor(diabetes, 
+                      levels = c(0, 1), 
+                      labels = c("No", "Yes")) |> 
+      relevel(ref = "No"),
+    vaccine = factor(vaccine, 
+                     levels = c(0, 1), 
+                     labels = c("Not_vaccinated", "Vaccinated")) |> 
+      relevel(ref = "Not_vaccinated"),
+    severity = factor(severity, 
+                      levels = c(0, 1), 
+                      labels = c("Not_severe", "Severe")) |> 
+      relevel(ref = "Not_severe")
+  ) |> 
+  janitor::clean_names()
+
+# checking levels
+levels(training_data$race)
+levels(training_data$smoking)
+levels(training_data$hypertension)
+levels(training_data$diabetes)
+levels(training_data$vaccine)
+levels(training_data$severity)
 
 # matrix of predictors & vector of response for data set exploration
-x_train = model.matrix(severity ~., training_data)[, -1]
-y_train = training_data$severity
+x.train = model.matrix(severity ~ ., training_data)[, -1]
+y.train = training_data$severity
 
 # loading testing data
 load("data/severity_test.RData")
 
 # making discrete variables factors
 test_data = test_data |> 
-  janitor::clean_names() |> 
   select(-id) |> 
-  mutate(gender = as.factor(gender),
-         race = as.factor(race),
-         smoking = as.factor(smoking),
-         hypertension = as.factor(hypertension),
-         diabetes = as.factor(diabetes),
-         vaccine = as.factor(vaccine),
-         severity = as.factor(severity))
+  mutate_at(vars(age, height, weight, bmi, SBP, LDL, depression), as.numeric) |> 
+ mutate(
+    gender = factor(gender, 
+                    levels = c(0, 1), 
+                    labels = c("Female", "Male")) |> 
+      relevel(ref = "Female"),
+    race = factor(race, 
+                  levels = c(1, 2, 3, 4), 
+                  labels = c("White", "Asian", "Black", "Hispanic")) |> 
+      relevel(ref = "White"),
+    smoking = factor(smoking, 
+                     levels = c(0, 1, 2), 
+                     labels = c("Never_smoked", "Former_smoker", "Current_smoker")) |> 
+      relevel(ref = "Never_smoked"),
+    hypertension = factor(hypertension, 
+                          levels = c(0, 1), 
+                          labels = c("No", "Yes")) |> 
+      relevel(ref = "No"),
+    diabetes = factor(diabetes, 
+                      levels = c(0, 1), 
+                      labels = c("No", "Yes")) |> 
+      relevel(ref = "No"),
+    vaccine = factor(vaccine, 
+                     levels = c(0, 1), 
+                     labels = c("Not_vaccinated", "Vaccinated")) |> 
+      relevel(ref = "Not_vaccinated"),
+    severity = factor(severity, 
+                      levels = c(0, 1), 
+                      labels = c("Not_severe", "Severe")) |> 
+      relevel(ref = "Not_severe")
+  ) |> 
+  janitor::clean_names()
 
 # matrix of predictors and vector of response
-x_test = model.matrix(severity ~., test_data)[, -1]
-y_test = test_data$severity
+x.test = model.matrix(severity ~., test_data)[, -1]
+y.test = test_data$severity
 ```
 \newpage
 
@@ -114,6 +183,8 @@ y_test = test_data$severity
 
 ## Descriptive Statistics
 ```{r}
+# when doing data exploration, should we do this on the entire dataset? do we need to create a random split?
+
 descriptive_table = table1(~ age + gender + race + smoking + height + weight + bmi + hypertension + diabetes + sbp + ldl + vaccine + depression | severity,
                             data = training_data,
                             overall = "Total",
@@ -121,129 +192,6 @@ descriptive_table = table1(~ age + gender + race + smoking + height + weight + b
 
 ds = t1kable(descriptive_table)
 ds
-```
-
-## Discrete Variable Visualization
-```{r}
-# gender x severity
-prop_gender <- training_data %>%
-  group_by(gender, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-gender_labels = c("1" = "Male", "0" = "Female")
-
-ggplot(prop_gender,
-       aes(y = factor(gender),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Gender", fill = "Severity") +
-  ggtitle("Proportion of Severity by Gender") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = gender_labels) +
-  theme_minimal()
-
-# race x severity 
-prop_race <- training_data %>%
-  group_by(race, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-race_labels = c("1" = "White", "2" = "Asian", "3" = "Black", "4" = "Hispanic")
-
-ggplot(prop_race,
-       aes(y = factor(race),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Race", fill = "Severity") +
-  ggtitle("Proportion of Severity by Race") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = race_labels) +
-  theme_minimal()
-
-# smoking status x severity
-prop_smoking <- training_data %>%
-  group_by(smoking, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-smoking_labels = c("1" = "Former Smoker", "2" = "Current Smoker", "0" = "Never Smoked")
-
-ggplot(prop_smoking,
-       aes(y = factor(smoking),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Smoking Status", fill = "Severity") +
-  ggtitle("Proportion of Severity by Smoking Status") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = smoking_labels) +
-  theme_minimal()
-
-# hypertension status x severity
-prop_hyp <- training_data %>%
-  group_by(hypertension, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-hyp_labels = c("0" = "No", "1" = "Yes")
-
-ggplot(prop_hyp,
-       aes(y = factor(hypertension),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Hypertension Status", fill = "Severity") +
-  ggtitle("Proportion of Severity by Hypertension Status") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = hyp_labels) +
-  theme_minimal()
-
-# diabetes x severity
-prop_dia <- training_data %>%
-  group_by(diabetes, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-dia_labels = c("0" = "No", "1" = "Yes")
-
-ggplot(prop_dia,
-       aes(y = factor(diabetes),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Diabetes Status", fill = "Severity") +
-  ggtitle("Proportion of Severity by Diabetes Status") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = dia_labels) +
-  theme_minimal()
-
-# vaccine x severity
-prop_vaccine <- training_data %>%
-  group_by(vaccine, severity) %>%
-  summarise(count = n()) %>%
-  mutate(prop = count / sum(count))
-
-vax_labels = c("0" = "Not vaccinated", "1" = "Vaccinated")
-
-ggplot(prop_vaccine,
-       aes(y = factor(vaccine),
-           x = prop,
-           fill = factor(severity), label = scales::percent(prop))) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(position = position_dodge(width = 0.9),  vjust = -0.4) +  
-  labs(x = "Proportion", y = "Vaccination Status at Time of Infection", fill = "Severity") +
-  ggtitle("Proportion of Severity by Vaccination Status") +
-  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
-  scale_y_discrete(labels = vax_labels) +
-  theme_minimal()
 ```
 
 ## Continuous Variable Visualization
@@ -257,30 +205,438 @@ theme1$strip.background$col <- rgb(.0, .2, .6, .2)
 trellis.par.set(theme1)
 
 featurePlot(
-  x_train[, -c(2, 3, 4, 5, 6, 7, 11, 12, 15)],
-  y_train,
-  plot = "box",
-  labels = c("", "Y"),
-  type = c("p", "smooth"),
-  layout = c(4, 3))
+  x.train[, -c(2, 3, 4, 5, 6, 7, 11, 12, 15)],
+  y.train,
+  scales = list(x = list(relation = "free"),
+                y = list(relation = "free")),
+  plot = "box")
 ```
-
 \newpage
 
 # Model training
+
+## Logistic Regression
 ```{r}
+# setting a 10-fold cross-validation
+ctrl = trainControl(method = "cv", number = 10,
+                    summaryFunction = twoClassSummary,
+                    classProbs = TRUE)
+set.seed(2)
+
+# logistic regression
+model.glm = train(x = training_data[1:13],
+                   y = training_data$severity,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+plot(model.glm$finalModel)
+
+coef(model.glm$finalModel)
+```
+\newpage
+
+## Penalized Logistic Regression
+```{r}
+# penalized logistic regression - elastic net (need help)
+glmnGrid = expand.grid(.alpha = seq(0, 1, length = 21),
+                       .lambda = exp(seq(-8, -1, length = 50)))
+set.seed(2)
+model.glmn = train(x = training_data[1:13],
+                   y = training_data$severity,
+                   method = "glmnet",
+                   tuneGrid = glmnGrid,
+                   metric = "ROC",
+                   trControl = ctrl)
+model.glmn$bestTune
+
+myCol = rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+superpose.line = list(col = myCol))
+plot(model.glmn, par.settings = myPar, xTrans = function(x) log(x))
+```
+\newpage
+
+## KNN
+```{r}
+set.seed(2)
+
+model.knn = train(x.train, y.train,
+                 method = "knn",
+                 trControl = ctrl,
+                 tuneGrid = expand.grid(k = seq(from = 1, to = 18, by = 1)))
+
+ggplot(model.knn, highlight = TRUE) + theme_bw()
+```
+\newpage
+
+## PLS
+```{r}
+set.seed(2)
+
+# pls using caret
+model.pls = train(x.train, y.train,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:13),
+                 trControl = ctrl,
+                 preProcess = c("center", "scale"))
+
+ggplot(model.pls, highlight = TRUE) + theme_bw()
+```
+\newpage
+
+## MARS
+```{r}
+# MARS 
+set.seed(2)
+model.mars = train(x = training_data[1:13],
+                   y = training_data$severity,
+                   method = "earth",
+                   tuneGrid = expand.grid(degree = 1:4,
+                                          nprune = 2:20),
+                   metric = "ROC",
+                   trControl = ctrl)
+
+plot(model.mars)
+model.mars$bestTune
+coef(model.mars$finalModel)
+```
+\newpage
+
+##  GAM
+```{r}
+set.seed(2)
+
+model.gam = train(x = x.train,
+                  y = y.train,
+                  method = "gam",
+                  metric = "ROC",
+                  trControl = ctrl)
+
+model.gam$finalModel
+plot(model.gam$finalModel)
+```
+
+
+## LDA 
+```{r}
+set.seed(2)
+model.lda = train(x = x.train,
+                   y = y.train,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+model.lda$finalModel
+```
+\newpage
+
+## QDA
+```{r}
+set.seed(2)
+model.qda = train(x = x.train,
+                  y = y.train,
+                  method = "qda",
+                  metric = "ROC",
+                  trControl = ctrl)
+model.qda$finalModel
+```
+\newpage
+
+## Naive Bayes (NB)
+```{r} 
+# how to tune NB?
+nbGrid = expand.grid(usekernel = c(FALSE, TRUE),
+                     fL = 1,
+                     adjust = seq(.2, 5, by = .2))
+set.seed(2)
+model.nb = train(x = x.train,
+                 y = y.train,
+                 method = "nb",
+                 tuneGrid = nbGrid,
+                 metric = "ROC",
+                 trControl = ctrl)
+plot(model.nb)
+
+model.nb$bestTune
+model.nb$finalModel
+```
+\newpage
+
+## CART
+```{r}
+# CART
+set.seed(2)
+model.cart = train(severity ~ . ,
+                  training_data,
+                  method = "rpart",
+                  tuneGrid = data.frame(cp = exp(seq(-8,-5, len = 100))),
+                  trControl = ctrl,
+                  metric = "ROC")
+
+plot(model.cart, xTrans = log)
+
+model.cart$bestTune
+rpart.plot(model.cart$finalModel)
+```
+\newpage
+
+## Conditional Inference Trees (CIT)
+```{r}
+set.seed(2)
+
+model.cit = train(severity ~ . ,
+                  training_data,
+                  method = "ctree",
+                  tuneGrid = data.frame(mincriterion = 1-exp(seq(-8, -1, length = 100))),
+                  trControl = ctrl)
+
+ggplot(model.cit, highlight = TRUE)
+
+model.cit$bestTune
+
+plot(model.cit$finalModel)
+```
+\newpage
+
+## Random Forest
+```{r}
+# Try more if possible
+rf.grid = expand.grid(mtry = 1:13,
+                      splitrule = "gini",
+                      min.node.size = seq(from = 2, to = 16, by = 2))
+set.seed(2)
+model.rf = train(severity ~ . ,
+                 data = training_data,
+                 method = "ranger",
+                 tuneGrid = rf.grid,
+                 trControl = ctrl)
+model.rf$bestTune
+
+ggplot(model.rf, highlight = TRUE)
+```
+\newpage
+
+## AdaBoost
+```{r}
+#Try more
+gbmA.grid = expand.grid(n.trees = c(1000,2000,3000,4000,5000),
+                        interaction.depth = 1:6,
+                        shrinkage = c(0.001, 0.002, 0.003),
+                        n.minobsinnode = 1)
+
+set.seed(2)
+
+model.gbmA = train(severity ~ . ,
+                 training_data,
+                 tuneGrid = gbmA.grid,
+                 trControl = ctrl,
+                 method = "gbm",
+                 distribution = "adaboost",
+                 metric = "ROC",
+                 verbose = FALSE)
+model.gbmA$bestTune
+
+ggplot(model.gbmA, highlight = TRUE)
+```
+\newpage
+
+## Support Vector Machine: linear
+```{r}
+set.seed(2)
+
+model.svml = train(severity ~ . ,
+                   data = training_data,
+                   method = "svmLinear",
+                   tuneGrid = data.frame(C = exp(seq(-8, 2, len = 50))),
+                   trControl = ctrl)
+
+model.svml$bestTune
+
+plot(model.svml, highlight = TRUE, xTrans = log)
+```
+\newpage
+
+## SVML: e1071
+```{r}
+set.seed(2)
+
+model.svml2 = train(severity ~ . ,
+                   data = training_data,
+                   method = "svmLinear2",
+                   tuneGrid = data.frame(cost = exp(seq(-8, 2, len = 50))),
+                   trControl = ctrl)
+
+model.svml2$bestTune
+
+plot(model.svml2, highlight = TRUE, xTrans = log)
+```
+\newpage
+
+## SVML: Radial Sigma
+```{r}
+svmr.grid = expand.grid(C = exp(seq(1, 7, len = 50)),
+                        sigma = exp(seq(-8, -2, len = 20)))
+
+# tunes over both cost and sigma
+set.seed(2)
+model.svmr = train(severity ~ . ,
+                   data = training_data,
+                   method = "svmRadialSigma",
+                   tuneGrid = svmr.grid,
+                   trControl = ctrl)
+
+myCol = rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+superpose.line = list(col = myCol))
+
+model.svmr$bestTune
+
+plot(model.svmr, highlight = TRUE, par.settings = myPar)
+
+```
+\newpage
+
+## SVML: radial cost
+```{r}
+set.seed(2)
+
+model.svmr2 = train(severity ~ . , 
+                  data = training_data,
+                  method = "svmRadialCost",
+                  tuneGrid = data.frame(C = exp(seq(-8, 1, len = 20))),
+                  trControl = ctrl)
+
+model.svmr2$bestTune
+
+ggplot(model.svmr2, highlight = TRUE, par.settings = myPar)
 ```
 \newpage
 
 # Results
-```{r}
 
+## Model Comparison: Cross Validation Performance
+```{r}
+res = resamples(list(GLM = model.glm,
+                     GLMNET = model.glmn,
+                     KNN = model.knn,
+                     PLS = model.pls,
+                     GAM = model.gam,
+                     MARS = model.mars, 
+                     LDA = model.lda, 
+                     QDA = model.qda, 
+                     NB = model.nb, 
+                     CART = model.cart, 
+                     CIT = model.cit,
+                     RF = model.rf,
+                     SVML = model.svml,
+                     E1071 = model.svml2,
+                     SVMR = model.svmr,
+                     SVMR2 = model.svmr2,
+                     gbmA = model.gbmA
+                     ))
+summary(res)
+
+bwplot(res, metric = "ROC") # gbMA has highest median and mean ROC
+                  
+# Cross-validation error
+glm.predict = predict(model.glm, newdata = training_data)
+# glmnet.predict = predict(model.glmn, newdata = x.train) # getting error?
+knn.predict = predict(model.knn, newdata = x.train)
+pls.predict = predict(model.pls, newdata = x.train)
+gam.predict = predict(model.gam, newdata = x.train)
+mars.predict = predict(model.mars, newdata = training_data)
+lda.predict = predict(model.lda, newdata = x.train)
+qda.predict = predict(model.qda, newdata = x.train)
+nb.predict = predict(model.nb, newdata = x.train)
+cart.predict = predict(model.cart, newdata = training_data)
+cit.predict = predict(model.cit, newdata = training_data)
+rf.predict = predict(model.rf, newdata = training_data)
+svml.predict = predict(model.svml, newdata = training_data)
+e1071.predict = predict(model.svml2, newdata = training_data)
+svmr.predict = predict(model.svmr, newdata = training_data)
+svmr2.predict = predict(model.svmr2, newdata = training_data)
+gbmA.predict = predict(model.gbmA, newdata = training_data)
+
+confusionMatrix(data = glm.predict, reference = y.train)
+# confusionMatrix(data = glmnet.predict, reference = y.train)
+confusionMatrix(data = knn.predict, reference = y.train)
+confusionMatrix(data = pls.predict, reference = y.train)
+confusionMatrix(data = gam.predict, reference = y.train)
+confusionMatrix(data = mars.predict, reference = y.train)
+confusionMatrix(data = lda.predict, reference = y.train)
+confusionMatrix(data = qda.predict, reference = y.train)
+confusionMatrix(data = nb.predict, reference = y.train)
+confusionMatrix(data = cart.predict, reference = y.train)
+confusionMatrix(data = cit.predict, reference = y.train)
+confusionMatrix(data = rf.predict, reference = y.train)              
+confusionMatrix(data = svml.predict, reference = y.train)  
+confusionMatrix(data = e1071.predict, reference = y.train) 
+confusionMatrix(data = svmr.predict, reference = y.train) 
+confusionMatrix(data = svmr2.predict, reference = y.train) 
+confusionMatrix(data = gbmA.predict, reference = y.train)
+
+# 1 - accuracy
+gbm_CV_error = 1 - 0.86
+# glmnet_CV_error = 1 - 0.645 
+knn_CV_error = 1 - 0.7575
+pls_CV_error = 1 - 0.8488 
+gam_CV_error = 1 - 0.8688 
+mars_CV_error = 1 - 0.8538
+lda_CV_error = 1 - 0.845
+qda_CV_error = 1 - 0.8662
+nb_CV_error = 1 - 0.815
+cart_CV_error = 1 - 0.895
+cit_CV_error = 1 - 0.8688
+rf_CV_error = 1 - 0.94
+svml_CV_error = 1 - 0.8225
+e1071_CV_error = 1 - 0.8612
+svmr_CV_error = 1 - 0.87
+svmr2_CV_error = 1 - 0.8712
+gbMA_CV_error = 1 - 0.8888
+
+# CV error
+gbm_CV_error
+# glmnet_CV_error
+knn_CV_error
+pls_CV_error 
+gam_CV_error
+mars_CV_error
+lda_CV_error
+qda_CV_error
+nb_CV_error
+cart_CV_error
+cit_CV_error
+rf_CV_error
+svml_CV_error
+e1071_CV_error
+svmr_CV_error
+svmr2_CV_error
+gbMA_CV_error
 ```
 \newpage
 
-# Conclusion
+The gbmA boosted model has the highest mean and median ROC value, based on the resampling summary. The random forest model, however, has the lowest cross-validation error, therefore is the model I choose. 
+
+## Test Data Performance
 ```{r}
+# test error: gbmA
+gbMA.test = predict(model.gbmA, newdata = test_data)
+
+confusionMatrix(data = gbMA.test,
+                reference = y.test,
+                )
+# 1 - accuracy
+gbmA_test_error = 1 - 0.865
+gbmA_test_error
+
+# test error: random forest
+rf.test = predict(model.rf, newdata = test_data)
+
+confusionMatrix(data = rf.test,
+                reference = y.test,
+                )
+# 1 - accuracy
+rf_test_error = 1 - 0.855
+rf_test_error
 ```
-\newpage
-
-
