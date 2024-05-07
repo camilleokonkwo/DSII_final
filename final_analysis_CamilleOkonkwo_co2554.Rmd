@@ -84,7 +84,7 @@ Here is a description of each variable:
 ## Data Preparation
 ```{r data_partition, echo = T, message = FALSE, results = 'hide', warning=FALSE}
 # loading training data
-load("data/severity_training.RData") # is depression discrete?
+load("data/severity_training.RData") 
 
 # making discrete variables factors
 training_data = training_data |> 
@@ -181,10 +181,8 @@ y.test = test_data$severity
 
 # Exploratory analysis and data visualization
 
-## Descriptive Statistics
+## Descriptive Statistics of Training Data
 ```{r}
-# when doing data exploration, should we do this on the entire dataset? do we need to create a random split?
-
 descriptive_table = table1(~ age + gender + race + smoking + height + weight + bmi + hypertension + diabetes + sbp + ldl + vaccine + depression | severity,
                             data = training_data,
                             overall = "Total",
@@ -211,6 +209,61 @@ featurePlot(
                 y = list(relation = "free")),
   plot = "box")
 ```
+
+The mean and median ages for both `Severity` groups (Not Severe and Severe) are close, indicating a relatively balanced distribution of age across severity levels. `Height`, `Weight`, and `BMI` have similar mean and median values, suggesting comparable distributions of these variables between the two `severity` groups. The Systolic Blood Pressure (`SBP`) and LDL cholesterol (`LDL`) variables show slightly higher mean values in the Severe group compared to the Not Severe group, indicating potential differences in these clinical measures between `severity` levels.
+
+## Descriptive Table of Discrete Variables
+```{r}
+descriptive_table2 = table1(~ gender + race + smoking + hypertension + diabetes + vaccine | severity,
+                            data = training_data,
+                            overall = "Total",
+                            caption = "Descriptive Characteristics of Participants, Stratified by Severity of COVID-19 Infection")
+
+ds_bin = t1kable(descriptive_table2)
+ds_bin
+```
+
+The distribution of `gender` is relatively balanced in both `severity` groups, with slightly more females in the Not Severe group and slightly more males in the Severe group. The majority of participants in both `severity` groups are White, followed by Black, Asian, and Hispanic participants. The distribution across `race` appears to be consistent between severity levels. The majority of participants in both `severity` groups are non-smokers (Never smoked category), followed by former smokers and current smokers. The distribution of `smoking` status is similar between `severity` levels.The prevalence of `hypertension` and `diabetes` is noticeably higher in the Severe group compared to the Not Severe group, indicating a potential association between these conditions and COVID-19 `severity`. A significant proportion of participants in the Severe group are not vaccinated, while the majority in the Not Severe group are vaccinated. This suggests a potential protective effect of vaccination against severe COVID-19 infection. The mean and median `depression` scores are similar between `severity` groups, indicating comparable levels of depression risk or severity across severity levels.
+\newpage
+
+# Pre-Processing
+
+Based on the descriptive statistics of the training data, scaling the training data has potential benefits for most of the classificaiton algorithms I plan to use. I will scale the data foe the benefits of standardizing the features, model stability, and ensuring that each feature contributes meaningfully to the model training process.
+
+```{r}
+# Preprocess the training data by centering and scaling numerical features
+t_train = preProcess(training_data, 
+                     method = c("center", "scale"))
+t_train
+
+# Apply the preprocessing transformation to the training data to obtain scaled data
+scaled_training = predict(t_train, newdata = training_data)
+
+head(scaled_training)
+
+# Create the design matrix for training with scaled features, excluding the intercept column
+x.train.scaled = model.matrix(severity ~ ., scaled_training)[, -1]
+
+# Extract the scaled target variable (severity) from the scaled training data
+y.train.scaled = scaled_training$severity
+
+# Preprocess the test data using the same transformation applied to the training data
+t_test = preProcess(test_data, 
+                     method = c("center", "scale"))
+t_test
+
+# Apply the preprocessing transformation to the test data to obtain scaled data
+scaled_testing = predict(t_test, newdata = test_data)
+
+# Create the design matrix for testing with scaled features, excluding the intercept column
+x.test.scaled = model.matrix(severity ~ ., scaled_testing)[, -1]
+
+# Extract the scaled target variable (severity) from the scaled testing data
+y.test.scaled = scaled_training$severity
+```
+
+I will compare model performance between scaled and un-scaled data to see if there any benefits from scaling.
+
 \newpage
 
 # Model training
@@ -224,26 +277,36 @@ ctrl = trainControl(method = "cv", number = 10,
 set.seed(2)
 
 # logistic regression
-model.glm = train(x = training_data[1:13],
-                   y = training_data$severity,
+model.glm = train(x = x.train,
+                   y = y.train,
                    method = "glm",
                    metric = "ROC",
                    trControl = ctrl)
 
 plot(model.glm$finalModel)
-
 coef(model.glm$finalModel)
+
+set.seed(2)
+# logistic regression scaled
+scaled.model.glm = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+plot(scaled.model.glm$finalModel)
+coef(scaled.model.glm$finalModel)
 ```
 \newpage
 
 ## Penalized Logistic Regression
 ```{r}
-# penalized logistic regression - elastic net (need help)
+# penalized logistic regression - elastic net
 glmnGrid = expand.grid(.alpha = seq(0, 1, length = 21),
                        .lambda = exp(seq(-8, -1, length = 50)))
 set.seed(2)
-model.glmn = train(x = training_data[1:13],
-                   y = training_data$severity,
+model.glmn = train(x = x.train,
+                   y = y.train,
                    method = "glmnet",
                    tuneGrid = glmnGrid,
                    metric = "ROC",
@@ -254,27 +317,51 @@ myCol = rainbow(25)
 myPar = list(superpose.symbol = list(col = myCol),
 superpose.line = list(col = myCol))
 plot(model.glmn, par.settings = myPar, xTrans = function(x) log(x))
+
+# penalized logistic regression - scaled
+set.seed(2)
+scaled.model.glmn = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "glmnet",
+                   tuneGrid = glmnGrid,
+                   metric = "ROC",
+                   trControl = ctrl)
+scaled.model.glmn$bestTune
+
+myCol = rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+superpose.line = list(col = myCol))
+plot(scaled.model.glmn, par.settings = myPar, xTrans = function(x) log(x))
 ```
 \newpage
 
-## KNN
+## KNN - how to tune?
 ```{r}
+# KNN
 set.seed(2)
-
 model.knn = train(x.train, y.train,
                  method = "knn",
                  trControl = ctrl,
-                 tuneGrid = expand.grid(k = seq(from = 1, to = 18, by = 1)))
+                 tuneGrid = expand.grid(k = seq(from = 1, to = 35, by = 1)))
 
 ggplot(model.knn, highlight = TRUE) + theme_bw()
+model.knn$finalModel
+
+# KNN scaled
+set.seed(2)
+scaled.model.knn = train(x.train.scaled, y.train.scaled,
+                 method = "knn",
+                 trControl = ctrl,
+                 tuneGrid = expand.grid(k = seq(from = 1, to = 35, by = 1)))
+
+ggplot(scaled.model.knn, highlight = TRUE) + theme_bw()
 ```
 \newpage
 
 ## PLS
 ```{r}
 set.seed(2)
-
-# pls using caret
+# pls 
 model.pls = train(x.train, y.train,
                  method = "pls",
                  tuneGrid = data.frame(ncomp = 1:13),
@@ -282,6 +369,19 @@ model.pls = train(x.train, y.train,
                  preProcess = c("center", "scale"))
 
 ggplot(model.pls, highlight = TRUE) + theme_bw()
+model.pls$bestTune
+
+set.seed(2)
+
+# pls scaled
+scaled.model.pls = train(x.train.scaled, y.train.scaled,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:13),
+                 trControl = ctrl,
+                 preProcess = c("center", "scale"))
+
+ggplot(scaled.model.pls, highlight = TRUE) + theme_bw()
+model.pls$bestTune
 ```
 \newpage
 
@@ -289,17 +389,31 @@ ggplot(model.pls, highlight = TRUE) + theme_bw()
 ```{r}
 # MARS 
 set.seed(2)
-model.mars = train(x = training_data[1:13],
-                   y = training_data$severity,
+model.mars = train(x = x.train,
+                   y = y.train,
                    method = "earth",
                    tuneGrid = expand.grid(degree = 1:4,
                                           nprune = 2:20),
                    metric = "ROC",
                    trControl = ctrl)
 
-plot(model.mars)
+ggplot(model.mars, highlight = TRUE)
 model.mars$bestTune
 coef(model.mars$finalModel)
+
+# MARS scaled
+set.seed(2)
+scaled.model.mars = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "earth",
+                   tuneGrid = expand.grid(degree = 1:4,
+                                          nprune = 2:20),
+                   metric = "ROC",
+                   trControl = ctrl)
+
+ggplot(scaled.model.mars, highlight = TRUE)
+scaled.model.mars$bestTune
+coef(scaled.model.mars$finalModel)
 ```
 \newpage
 
@@ -309,14 +423,27 @@ set.seed(2)
 
 model.gam = train(x = x.train,
                   y = y.train,
-                  method = "gam",
-                  metric = "ROC",
-                  trControl = ctrl)
+                   method = "gam",
+                   metric = "ROC",
+                   trControl = ctrl)
 
 model.gam$finalModel
 plot(model.gam$finalModel)
-```
+coef(model.gam)
 
+# GAM scaled
+set.seed(2)
+
+scaled.model.gam = train(x = x.train.scaled,
+                  y = y.train.scaled,
+                   method = "gam",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+scaled.model.gam$finalModel
+plot(scaled.model.gam$finalModel)
+```
+\newpage
 
 ## LDA 
 ```{r}
@@ -328,6 +455,17 @@ model.lda = train(x = x.train,
                    trControl = ctrl)
 
 model.lda$finalModel
+coef(model.lda)
+
+# LDA scaled
+set.seed(2)
+scaled.model.lda = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+scaled.model.lda$finalModel
 ```
 \newpage
 
@@ -340,12 +478,22 @@ model.qda = train(x = x.train,
                   metric = "ROC",
                   trControl = ctrl)
 model.qda$finalModel
+
+coef(model.qda)
+
+# QDA scaled
+set.seed(2)
+scaled.model.qda = train(x = x.train.scaled,
+                  y = y.train.scaled,
+                  method = "qda",
+                  metric = "ROC",
+                  trControl = ctrl)
+scaled.model.qda$finalModel
 ```
 \newpage
 
 ## Naive Bayes (NB)
 ```{r} 
-# how to tune NB?
 nbGrid = expand.grid(usekernel = c(FALSE, TRUE),
                      fL = 1,
                      adjust = seq(.2, 5, by = .2))
@@ -360,15 +508,28 @@ plot(model.nb)
 
 model.nb$bestTune
 model.nb$finalModel
+
+# NB scaled
+
+set.seed(2)
+scaled.model.nb = train(x = x.train.scaled,
+                 y = y.train.scaled,
+                 method = "nb",
+                 tuneGrid = nbGrid,
+                 metric = "ROC",
+                 trControl = ctrl)
+plot(scaled.model.nb)
+
+scaled.model.nb$bestTune
+scaled.model.nb$finalModel
 ```
 \newpage
 
 ## CART
 ```{r}
-# CART
 set.seed(2)
-model.cart = train(severity ~ . ,
-                  training_data,
+model.cart = train(x = x.train,
+                   y = y.train,
                   method = "rpart",
                   tuneGrid = data.frame(cp = exp(seq(-8,-5, len = 100))),
                   trControl = ctrl,
@@ -378,6 +539,20 @@ plot(model.cart, xTrans = log)
 
 model.cart$bestTune
 rpart.plot(model.cart$finalModel)
+
+# CART scaled
+set.seed(2)
+scaled.model.cart = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                  method = "rpart",
+                  tuneGrid = data.frame(cp = exp(seq(-8,-5, len = 100))),
+                  trControl = ctrl,
+                  metric = "ROC")
+
+plot(scaled.model.cart, xTrans = log)
+
+scaled.model.cart$bestTune
+rpart.plot(scaled.model.cart$finalModel)
 ```
 \newpage
 
@@ -385,8 +560,8 @@ rpart.plot(model.cart$finalModel)
 ```{r}
 set.seed(2)
 
-model.cit = train(severity ~ . ,
-                  training_data,
+model.cit = train(x = x.train,
+                  y = y.train,
                   method = "ctree",
                   tuneGrid = data.frame(mincriterion = 1-exp(seq(-8, -1, length = 100))),
                   trControl = ctrl)
@@ -396,6 +571,21 @@ ggplot(model.cit, highlight = TRUE)
 model.cit$bestTune
 
 plot(model.cit$finalModel)
+
+#CIT scaled
+set.seed(2)
+
+scaled.model.cit = train(x = x.train.scaled,
+                  y = y.train.scaled,
+                  method = "ctree",
+                  tuneGrid = data.frame(mincriterion = 1-exp(seq(-8, -1, length = 100))),
+                  trControl = ctrl)
+
+ggplot(scaled.model.cit, highlight = TRUE)
+
+scaled.model.cit$bestTune
+
+plot(scaled.model.cit$finalModel)
 ```
 \newpage
 
@@ -406,20 +596,31 @@ rf.grid = expand.grid(mtry = 1:13,
                       splitrule = "gini",
                       min.node.size = seq(from = 2, to = 16, by = 2))
 set.seed(2)
-model.rf = train(severity ~ . ,
-                 data = training_data,
+model.rf = train(x = x.train,
+                 y = y.train,
                  method = "ranger",
                  tuneGrid = rf.grid,
                  trControl = ctrl)
 model.rf$bestTune
 
 ggplot(model.rf, highlight = TRUE)
+
+# RF scaled
+set.seed(2)
+scaled.model.rf = train(x = x.train.scaled,
+                 y = y.train.scaled,
+                 method = "ranger",
+                 tuneGrid = rf.grid,
+                 trControl = ctrl)
+scaled.model.rf$bestTune
+
+ggplot(scaled.model.rf, highlight = TRUE)
 ```
 \newpage
 
 ## AdaBoost
 ```{r}
-#Try more
+# Try more
 gbmA.grid = expand.grid(n.trees = c(1000,2000,3000,4000,5000),
                         interaction.depth = 1:6,
                         shrinkage = c(0.001, 0.002, 0.003),
@@ -427,8 +628,8 @@ gbmA.grid = expand.grid(n.trees = c(1000,2000,3000,4000,5000),
 
 set.seed(2)
 
-model.gbmA = train(severity ~ . ,
-                 training_data,
+model.gbmA = train(x = x.train,
+                 y = y.train,
                  tuneGrid = gbmA.grid,
                  trControl = ctrl,
                  method = "gbm",
@@ -438,6 +639,21 @@ model.gbmA = train(severity ~ . ,
 model.gbmA$bestTune
 
 ggplot(model.gbmA, highlight = TRUE)
+
+# boosted rf scaled
+set.seed(2)
+
+scaled.model.gbmA = train(x = x.train.scaled,
+                 y = y.train.scaled,
+                 tuneGrid = gbmA.grid,
+                 trControl = ctrl,
+                 method = "gbm",
+                 distribution = "adaboost",
+                 metric = "ROC",
+                 verbose = FALSE)
+scaled.model.gbmA$bestTune
+
+ggplot(scaled.model.gbmA, highlight = TRUE)
 ```
 \newpage
 
@@ -445,8 +661,8 @@ ggplot(model.gbmA, highlight = TRUE)
 ```{r}
 set.seed(2)
 
-model.svml = train(severity ~ . ,
-                   data = training_data,
+model.svml = train(x = x.train,
+                   y = y.train,
                    method = "svmLinear",
                    tuneGrid = data.frame(C = exp(seq(-8, 2, len = 50))),
                    trControl = ctrl)
@@ -454,6 +670,19 @@ model.svml = train(severity ~ . ,
 model.svml$bestTune
 
 plot(model.svml, highlight = TRUE, xTrans = log)
+
+# SVM linear scaled
+set.seed(2)
+
+scaled.model.svml = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "svmLinear",
+                   tuneGrid = data.frame(C = exp(seq(-8, 2, len = 50))),
+                   trControl = ctrl)
+
+scaled.model.svml$bestTune
+
+plot(scaled.model.svml, highlight = TRUE, xTrans = log)
 ```
 \newpage
 
@@ -461,8 +690,8 @@ plot(model.svml, highlight = TRUE, xTrans = log)
 ```{r}
 set.seed(2)
 
-model.svml2 = train(severity ~ . ,
-                   data = training_data,
+model.svml2 = train(x = x.train,
+                    y = y.train,
                    method = "svmLinear2",
                    tuneGrid = data.frame(cost = exp(seq(-8, 2, len = 50))),
                    trControl = ctrl)
@@ -470,6 +699,19 @@ model.svml2 = train(severity ~ . ,
 model.svml2$bestTune
 
 plot(model.svml2, highlight = TRUE, xTrans = log)
+
+# SVML e1071 scaled
+set.seed(2)
+
+scaled.model.svml2 = train(x = x.train.scaled,
+                    y = y.train.scaled,
+                   method = "svmLinear2",
+                   tuneGrid = data.frame(cost = exp(seq(-8, 2, len = 50))),
+                   trControl = ctrl)
+
+scaled.model.svml2$bestTune
+
+plot(scaled.model.svml2, highlight = TRUE, xTrans = log)
 ```
 \newpage
 
@@ -480,8 +722,8 @@ svmr.grid = expand.grid(C = exp(seq(1, 7, len = 50)),
 
 # tunes over both cost and sigma
 set.seed(2)
-model.svmr = train(severity ~ . ,
-                   data = training_data,
+model.svmr = train(x = x.train,
+                   y = y.train,
                    method = "svmRadialSigma",
                    tuneGrid = svmr.grid,
                    trControl = ctrl)
@@ -494,6 +736,21 @@ model.svmr$bestTune
 
 plot(model.svmr, highlight = TRUE, par.settings = myPar)
 
+# scaled model
+set.seed(2)
+scaled.model.svmr = train(x = x.train.scaled,
+                   y = y.train.scaled,
+                   method = "svmRadialSigma",
+                   tuneGrid = svmr.grid,
+                   trControl = ctrl)
+
+myCol = rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+superpose.line = list(col = myCol))
+
+scaled.model.svmr$bestTune
+
+plot(scaled.model.svmr, highlight = TRUE, par.settings = myPar)
 ```
 \newpage
 
@@ -501,8 +758,8 @@ plot(model.svmr, highlight = TRUE, par.settings = myPar)
 ```{r}
 set.seed(2)
 
-model.svmr2 = train(severity ~ . , 
-                  data = training_data,
+model.svmr2 = train(x = x.train,
+                    y = y.train,
                   method = "svmRadialCost",
                   tuneGrid = data.frame(C = exp(seq(-8, 1, len = 20))),
                   trControl = ctrl)
@@ -510,6 +767,19 @@ model.svmr2 = train(severity ~ . ,
 model.svmr2$bestTune
 
 ggplot(model.svmr2, highlight = TRUE, par.settings = myPar)
+
+#  scaled model
+set.seed(2)
+
+scaled.model.svmr2 = train(x = x.train.scaled,
+                    y = y.train.scaled,
+                  method = "svmRadialCost",
+                  tuneGrid = data.frame(C = exp(seq(-8, 1, len = 20))),
+                  trControl = ctrl)
+
+scaled.model.svmr2$bestTune
+
+ggplot(scaled.model.svmr2, highlight = TRUE, par.settings = myPar)
 ```
 \newpage
 
@@ -540,26 +810,26 @@ summary(res)
 bwplot(res, metric = "ROC") # gbMA has highest median and mean ROC
                   
 # Cross-validation error
-glm.predict = predict(model.glm, newdata = training_data)
-# glmnet.predict = predict(model.glmn, newdata = x.train) # getting error?
+glm.predict = predict(model.glm, newdata = x.train)
+glmnet.predict = predict(model.glmn, newdata = x.train)
 knn.predict = predict(model.knn, newdata = x.train)
 pls.predict = predict(model.pls, newdata = x.train)
 gam.predict = predict(model.gam, newdata = x.train)
-mars.predict = predict(model.mars, newdata = training_data)
+mars.predict = predict(model.mars, newdata = x.train)
 lda.predict = predict(model.lda, newdata = x.train)
 qda.predict = predict(model.qda, newdata = x.train)
 nb.predict = predict(model.nb, newdata = x.train)
-cart.predict = predict(model.cart, newdata = training_data)
-cit.predict = predict(model.cit, newdata = training_data)
-rf.predict = predict(model.rf, newdata = training_data)
-svml.predict = predict(model.svml, newdata = training_data)
-e1071.predict = predict(model.svml2, newdata = training_data)
-svmr.predict = predict(model.svmr, newdata = training_data)
-svmr2.predict = predict(model.svmr2, newdata = training_data)
-gbmA.predict = predict(model.gbmA, newdata = training_data)
+cart.predict = predict(model.cart, newdata = x.train)
+cit.predict = predict(model.cit, newdata = x.train)
+rf.predict = predict(model.rf, newdata = x.train)
+svml.predict = predict(model.svml, newdata = x.train)
+e1071.predict = predict(model.svml2, newdata = x.train)
+svmr.predict = predict(model.svmr, newdata = x.train)
+svmr2.predict = predict(model.svmr2, newdata = x.train)
+gbmA.predict = predict(model.gbmA, newdata = x.train)
 
 confusionMatrix(data = glm.predict, reference = y.train)
-# confusionMatrix(data = glmnet.predict, reference = y.train)
+confusionMatrix(data = glmnet.predict, reference = y.train)
 confusionMatrix(data = knn.predict, reference = y.train)
 confusionMatrix(data = pls.predict, reference = y.train)
 confusionMatrix(data = gam.predict, reference = y.train)
@@ -578,8 +848,8 @@ confusionMatrix(data = gbmA.predict, reference = y.train)
 
 # 1 - accuracy
 gbm_CV_error = 1 - 0.86
-# glmnet_CV_error = 1 - 0.645 
-knn_CV_error = 1 - 0.7575
+glmnet_CV_error = 1 - 0.825 
+knn_CV_error = 1 - 0.7425
 pls_CV_error = 1 - 0.8488 
 gam_CV_error = 1 - 0.8688 
 mars_CV_error = 1 - 0.8538
@@ -597,7 +867,7 @@ gbMA_CV_error = 1 - 0.8888
 
 # CV error
 gbm_CV_error
-# glmnet_CV_error
+glmnet_CV_error
 knn_CV_error
 pls_CV_error 
 gam_CV_error
@@ -615,13 +885,37 @@ svmr2_CV_error
 gbMA_CV_error
 ```
 \newpage
-
 The gbmA boosted model has the highest mean and median ROC value, based on the resampling summary. The random forest model, however, has the lowest cross-validation error, therefore is the model I choose. 
+
+## Scaled Model Performance
+```{r}
+res2 = resamples(list(GLM = scaled.model.glm,
+                     GLMNET = scaled.model.glmn,
+                     KNN = scaled.model.knn,
+                     PLS = scaled.model.pls,
+                     GAM = scaled.model.gam,
+                     MARS = scaled.model.mars, 
+                     LDA = scaled.model.lda, 
+                     QDA = scaled.model.qda, 
+                     NB = scaled.model.nb, 
+                     CART = scaled.model.cart, 
+                     CIT = scaled.model.cit,
+                     RF = scaled.model.rf,
+                     SVML = scaled.model.svml,
+                     E1071 = scaled.model.svml2,
+                     SVMR = scaled.model.svmr,
+                     SVMR2 = scaled.model.svmr2,
+                     gbmA = scaled.model.gbmA
+                     ))
+summary(res2)
+
+bwplot(res2, metric = "ROC")
+```
 
 ## Test Data Performance
 ```{r}
 # test error: gbmA
-gbMA.test = predict(model.gbmA, newdata = test_data)
+gbMA.test = predict(model.gbmA, newdata = x.test)
 
 confusionMatrix(data = gbMA.test,
                 reference = y.test,
@@ -631,7 +925,7 @@ gbmA_test_error = 1 - 0.865
 gbmA_test_error
 
 # test error: random forest
-rf.test = predict(model.rf, newdata = test_data)
+rf.test = predict(model.rf, newdata = x.test)
 
 confusionMatrix(data = rf.test,
                 reference = y.test,
